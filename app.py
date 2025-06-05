@@ -1,12 +1,12 @@
 import streamlit as st
 import os
 import PyPDF2
-import openai
+from openai import OpenAI
 import pandas as pd
-from io import BytesIO, StringIO
+from io import BytesIO
 
 # Set your OpenAI API key
-openai.api_key = st.secrets["OPENAI_API_KEY"]
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 REFERENCE_DOCS_PATH = "REFRENCE DOCS"
 
@@ -157,13 +157,13 @@ Reference Documents:
 if st.button("Run Ethics Review") and user_docs:
     with st.spinner("Submitting to GPT..."):
         try:
-            response = openai.ChatCompletion.create(
+            response = client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": ethics_prompt}],
                 max_tokens=1500,
                 temperature=0.2,
             )
-            summary = response["choices"][0]["message"]["content"]
+            summary = response.choices[0].message.content
             st.subheader("📄 Ethics Committee Review")
             st.write(summary)
 
@@ -178,4 +178,3 @@ if st.button("Run Ethics Review") and user_docs:
             st.error(f"OpenAI API error: {e}")
 else:
     st.info("Upload user documents and click 'Run Ethics Review' to start.")
-
