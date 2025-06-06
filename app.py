@@ -4,13 +4,24 @@ import PyPDF2
 from openai import OpenAI
 import pandas as pd
 from io import BytesIO
+from docx import Document
+from docx.shared import Pt
 
-# Set your OpenAI API key
-client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+# --- HEADER WITH LOGO ---
+col1, col2 = st.columns([8, 1])
+with col1:
+    st.title("ECR SYSTEM")
+with col2:
+    st.image("logo.png", width=80)  # Adjust width as needed
+
+# --- USER NAME INPUT ---
+user_name = st.text_input("Enter your name")
+if user_name:
+    st.write(f"Welcome, {user_name}!")
 
 REFERENCE_DOCS_PATH = "REFRENCE DOCS"
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-# 1. Reference Documents
 def extract_text_from_pdf(file):
     text = ""
     try:
@@ -49,8 +60,7 @@ if os.path.exists(REFERENCE_DOCS_PATH):
                 "text": text
             })
 
-# 2. User Upload
-st.title("Ethics Committee Review System")
+# User Upload
 st.write("Upload your documents (application, proposal, questionnaire, etc.):")
 uploaded_files = st.file_uploader(
     "Upload PDF or TXT files", 
@@ -58,7 +68,6 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True
 )
 
-# 3. Classification
 required_types = [
     "Application Form",
     "Research Proposal",
@@ -100,7 +109,7 @@ for file in uploaded_files:
         "text": text
     })
 
-# 4. Document Summary Table
+# Document Summary Table
 summary = []
 for t in all_types:
     found = False
@@ -123,7 +132,7 @@ df = pd.DataFrame(summary)
 st.subheader("User Document Classification Summary")
 st.dataframe(df)
 
-# 5. Prepare prompt for OpenAI
+# Prepare prompt for OpenAI
 user_documents_text = ""
 for doc in user_docs:
     user_documents_text += f"{doc['type_detected']} ({doc['filename']}):\n{doc['text'][:1500]}\n\n"
@@ -146,6 +155,9 @@ Your task is to review the following uploaded documents and provide a detailed a
 5. Any other aspect that you might want to highlight.
 6. Overall recommendation and questions to ask (and why).
 
+User Name:
+{user_name}
+
 User Documents:
 {user_documents_text}
 
@@ -153,8 +165,38 @@ Reference Documents:
 {reference_documents_text}
 """
 
-# 6. Submit to OpenAI and Show Result
-if st.button("Run Ethics Review") and user_docs:
+def create_docx_report(user_name, summary, ai_review):
+    doc = Document()
+    doc.add_heading("Ethics Committee Review Report", 0)
+    doc.add_paragraph(f"Prepared for: {user_name}", style='Intense Quote')
+    doc.add_paragraph("")
+
+    doc.add_heading("User Document Classification Summary", level=1)
+    table = doc.add_table(rows=1, cols=3)
+    hdr_cells = table.rows[0].cells
+    hdr_cells[0].text = 'Expected Type'
+    hdr_cells[1].text = 'Detected In'
+    hdr_cells[2].text = 'Status'
+    for row in summary:
+        row_cells = table.add_row().cells
+        row_cells[0].text = row['Expected Type']
+        row_cells[1].text = row['Detected In']
+        row_cells[2].text = row['Status']
+    doc.add_paragraph("")
+
+    doc.add_heading("AI Review", level=1)
+    doc.add_paragraph(ai_review)
+
+    doc.add_paragraph("")
+    doc.add_paragraph("©copyright SSO Consultants", style='Intense Quote')
+
+    # Style tweaks
+    for paragraph in doc.paragraphs:
+        for run in paragraph.runs:
+            run.font.size = Pt(11)
+    return doc
+
+if st.button("Run Ethics Review") and user_docs and user_name:
     with st.spinner("Submitting to GPT..."):
         try:
             response = client.chat.completions.create(
@@ -163,18 +205,31 @@ if st.button("Run Ethics Review") and user_docs:
                 max_tokens=1500,
                 temperature=0.2,
             )
-            summary = response.choices[0].message.content
+            ai_review = response.choices[0].message.content
             st.subheader("📄 Ethics Committee Review")
-            st.write(summary)
+            st.write(f"Hello {user_name}, here is your review:")
+            st.write(ai_review)
 
-            # 7. Download Option
+            # DOCX report creation
+            doc = create_docx_report(user_name, summary, ai_review)
+            bio = BytesIO()
+            doc.save(bio)
+            bio.seek(0)
             st.download_button(
-                label="Download Review as .txt",
-                data=summary,
-                file_name="ethics_committee_review.txt",
-                mime="text/plain"
+                label="Download Review as Word (.docx)",
+                data=bio,
+                file_name="ethics_committee_review.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             )
         except Exception as e:
             st.error(f"OpenAI API error: {e}")
+elif not user_name:
+    st.info("Please enter your name above to proceed.")
 else:
     st.info("Upload user documents and click 'Run Ethics Review' to start.")
+
+# --- FOOTER ---
+st.markdown(
+    '<div style="text-align:center; color:gray; margin-top:30px;">©copyright SSO Consultants</div>',
+    unsafe_allow_html=True
+)
