@@ -3,4 +3,4 @@ openai
 PyPDF2
 pandas
 tqdm
-
+python-docx
