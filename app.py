@@ -13,21 +13,6 @@ with st.sidebar:
     st.markdown("<h3 style='color:#06038D;'>ECR SYSTEM</h3>", unsafe_allow_html=True)
     st.markdown("<span style='color:#FF671F;'>Powered by SSO Consultants</span>", unsafe_allow_html=True)
 
-# --- BORDER START ---
-st.markdown("""
-    <style>
-    .main-container {
-        border: 3px solid #06038D;
-        border-radius: 15px;
-        padding: 30px 30px 10px 30px;
-        background-color: #FFFFFF;
-        margin-bottom: 30px;
-        box-shadow: 0 4px 24px rgba(6,3,141,0.08);
-    }
-    </style>
-    <div class="main-container">
-""", unsafe_allow_html=True)
-
 # --- HEADER WITH LOGO ---
 col1, col2 = st.columns([8, 1])
 with col1:
@@ -35,10 +20,12 @@ with col1:
 with col2:
     st.image("logo.png", width=80)
 
+# --- USER NAME INPUT ---
 user_name = st.text_input("Enter your name")
 if user_name:
     st.success(f"Welcome, {user_name}!")
 
+# --- FILE UPLOADER ---
 st.markdown(
     "<h4 style='color:#FF671F;'>Upload your documents (application, proposal, questionnaire, etc.):</h4>",
     unsafe_allow_html=True
@@ -50,8 +37,6 @@ uploaded_files = st.file_uploader(
 )
 
 run_review = st.button("Run Ethics Review")
-
-# --- HELPER FUNCTIONS ---
 
 def extract_text_from_pdf(file):
     pdf_reader = PyPDF2.PdfReader(file)
@@ -76,6 +61,9 @@ def classify_user_doc(text):
         return "Unknown"
 
 def parse_markdown_table(md_table):
+    """
+    Parses a markdown table and returns a list of headers and rows.
+    """
     lines = [line.strip() for line in md_table.strip().split('\n') if line.strip()]
     if len(lines) < 2 or "|" not in lines[0]:
         return [], []
@@ -88,25 +76,36 @@ def parse_markdown_table(md_table):
                 rows.append(row)
     return headers, rows
 
-def extract_section(text, section_number):
+def extract_section(text, section_title):
+    """
+    Extracts a section from the AI output by section title.
+    """
     import re
-    # Matches text after \n{section_number}. up to the next \n\d+. or end of string
-    pattern = rf"\n{section_number}\s*(.*?)(?=\n\d+\.\s|$)"
+    pattern = rf"{section_title}\s*(.*?)(?=\n\d+\.\s|$)"
     match = re.search(pattern, text, re.DOTALL)
     return match.group(1).strip() if match else ""
 
 def extract_first_table(text):
+    """
+    Extracts the first markdown table from text.
+    """
     import re
     table_pattern = r"(\|.+\|\n\|[-\s|:]+\|\n(?:\|.*\|\n?)+)"
     match = re.search(table_pattern, text)
     return match.group(1).strip() if match else ""
 
 def get_summary_section(ai_review):
+    """
+    Extracts a summary or highlights section from the AI review.
+    If not found, returns a default message.
+    """
+    # Try to find a summary or highlights section
     import re
     summary_pattern = r"(Summary|Highlights|Key Findings)[:\n]+(.+?)(?=\n\d+\.\s|$)"
     match = re.search(summary_pattern, ai_review, re.IGNORECASE | re.DOTALL)
     if match:
         return match.group(2).strip()
+    # Otherwise, take the first 3-4 lines as a summary
     lines = ai_review.strip().split("\n")
     return "\n".join(lines[:4]) if lines else "No summary provided."
 
@@ -227,8 +226,6 @@ def create_docx_report(user_name, summary, ai_review, logo_path="logo.png"):
         for run in paragraph.runs:
             run.font.size = Pt(11)
     return doc
-
-# --- MAIN LOGIC ---
 
 if run_review and uploaded_files and user_name:
     with st.spinner("Processing your documents and submitting to GPT..."):
@@ -359,17 +356,13 @@ if run_review and uploaded_files and user_name:
             label="Download ECR Report as Word (.docx)",
             data=bio,
             file_name=file_name,
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            key=file_name  # Ensures the download button updates with new data
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
 
 elif run_review and not user_name:
     st.warning("Please enter your name above to proceed.")
 elif run_review and not uploaded_files:
     st.warning("Please upload at least one document to proceed.")
-
-# --- BORDER END ---
-st.markdown("</div>", unsafe_allow_html=True)
 
 # --- FOOTER ---
 st.markdown(
