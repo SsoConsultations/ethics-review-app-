@@ -73,7 +73,7 @@ def extract_section_text(text, section_title):
     else:
         return text[start_index:].strip() # Capture till end if no next heading
 
-# --- MODIFIED create_pdf_report to handle plain text for "tables" ---
+# --- create_pdf_report function (no longer used for download, but kept for reference if needed) ---
 def create_pdf_report(user_name, ai_review, logo_path="logo.png"):
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=30, leftMargin=30, topMargin=40, bottomMargin=30)
@@ -279,8 +279,7 @@ if run_review and uploaded_files and user_name:
         for doc in user_docs:
             user_documents_text += f"{doc['filename']}:\n{doc['text'][:1500]}\n\n"
 
-        # Retained explicit markdown instructions in prompt, as it might subtly influence the AI's structure
-        # even if not perfectly adhered to with pipes.
+        # Refined prompt to strongly emphasize newlines and blank lines
         ethics_prompt = f"""
 You are an expert in Indian research ethics committee review. Your role is to analyze the user's submission against three baseline reference documents:
 
@@ -296,14 +295,13 @@ You are an expert in Indian research ethics committee review. Your role is to an
   - The first point should reference the most relevant section or clause of the guideline.
   - The second point should state whether the user's submission is compliant, non-compliant, or partially compliant.
   - The third point should briefly explain your assessment for each section or clause.
-  - Only include the most critical and relevant sections/clauses from each guideline (do not include the entire guideline).
 
-**STRICT ADHERENCE TO TEXT FORMATTING:**
-- For the review points under each guideline, present them clearly in the following format:
+**STRICT ADHERENCE TO TEXT FORMATTING (CRITICAL FOR DISPLAY):**
+- For the review points under each guideline, present them clearly in the following format. Each label *must* start on a new line:
   Section/Clause: [Your Section/Clause Text]
   Compliance: [Yes/No/Partial]
   Explanation: [Your detailed explanation]
-- Ensure each of these three components (Section/Clause, Compliance, Explanation) is on its own line and clearly labeled as shown above. This is crucial for readability in the final report.
+- After each complete 'Section/Clause', 'Compliance', 'Explanation' block, add an extra blank line for visual separation.
 
 **Additional Analysis:**
 - After the three guideline reviews, provide:
@@ -335,17 +333,39 @@ You are an expert in Indian research ethics committee review. Your role is to an
         )
         ai_review = response.choices[0].message.content
 
+        # --- Post-process AI review for better display on Streamlit ---
+        # This step will insert newlines to ensure each label appears on its own line for better readability.
+        # It handles cases where AI might put labels on the same line.
+
+        processed_ai_review = ai_review
+
+        # Ensure "Section/Clause:", "Compliance:", "Explanation:" start on new lines.
+        # The regex `(?<!\n)` ensures a newline is added *only if* it's not already preceded by one.
+        processed_ai_review = re.sub(r'(?<!\n)(Section/Clause:)', r'\n\1', processed_ai_review, flags=re.IGNORECASE)
+        processed_ai_review = re.sub(r'(?<!\n)(Compliance:)', r'\n\1', processed_ai_review, flags=re.IGNORECASE)
+        processed_ai_review = re.sub(r'(?<!\n)(Explanation:)', r'\n\1', processed_ai_review, flags=re.IGNORECASE)
+
+        # For "English and Construction of the Questionnaire" section concerns
+        processed_ai_review = re.sub(r'(?<!\n)(Concern:)', r'\n\1', processed_ai_review, flags=re.IGNORECASE)
+
+        # Specifically address the issue where the guideline title and first Section/Clause might be on one line
+        # e.g., "... (2017) Section/Clause:" -> "... (2017)\nSection/Clause:"
+        processed_ai_review = re.sub(r'(\)\s*)(Section/Clause:)', r'\1\n\2', processed_ai_review)
+
+
         st.subheader("📄 ECR Report")
         st.write(f"Hello {user_name}, here is your review:")
-        st.write(ai_review)
+        st.write(processed_ai_review) # Display the processed content
 
-        pdf_buffer = create_pdf_report(user_name, ai_review)
-        file_name = f"{user_name.replace(' ', '_')}_ECR_Report.pdf"
+        # Removed the call to create_pdf_report for download
+        # Now providing a plain text download button
+        txt_buffer = BytesIO(ai_review.encode('utf-8'))
+        file_name = f"{user_name.replace(' ', '_')}_ECR_Report.txt"
         st.download_button(
-            label="Download ECR Report as PDF",
-            data=pdf_buffer,
+            label="Download ECR Report as Text",
+            data=txt_buffer,
             file_name=file_name,
-            mime="application/pdf",
+            mime="text/plain",
             key=file_name
         )
 
