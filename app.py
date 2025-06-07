@@ -17,7 +17,7 @@ with st.sidebar:
     st.markdown("<span style='color:#FF671F;'>Powered by SSO Consultants</span>", unsafe_allow_html=True)
 
 # --- HEADER WITH LOGO BESIDE HEADING ---
-col1, col2 = st.columns([8, 1])  # Adjust ratio as needed
+col1, col2 = st.columns([8, 1])
 with col1:
     st.markdown("<h1 style='color:#06038D; margin-bottom: 0;'>ECR SYSTEM</h1>", unsafe_allow_html=True)
 with col2:
