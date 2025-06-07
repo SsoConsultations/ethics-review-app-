@@ -4,3 +4,4 @@ PyPDF2
 pandas
 tqdm
 python-docx
+reportlab
