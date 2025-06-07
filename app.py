@@ -4,9 +4,10 @@ import PyPDF2
 from openai import OpenAI
 import pandas as pd
 from io import BytesIO
-from docx import Document
-from docx.shared import Pt, Inches, RGBColor
-from docx.enum.text import WD_ALIGN_PARAGRAPH
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
 
 # --- SIDEBAR WITH LOGO AND COMPANY INFO ---
 with st.sidebar:
@@ -110,123 +111,100 @@ def get_summary_section(ai_review):
     lines = ai_review.strip().split("\n")
     return "\n".join(lines[:4]) if lines else "No summary provided."
 
-def set_column_widths(table, widths):
-    for col, width in zip(table.columns, widths):
-        col.width = Inches(width)
+def create_pdf_report(user_name, summary, ai_review, logo_path="logo.png"):
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=30, leftMargin=30, topMargin=40, bottomMargin=30)
+    elements = []
+    styles = getSampleStyleSheet()
+    styleH = styles['Heading1']
+    styleH.textColor = colors.HexColor("#06038D")
+    styleN = styles['Normal']
+    styleN.fontSize = 11
 
-def format_table_cells(table):
-    for row in table.rows:
-        for cell in row.cells:
-            for paragraph in cell.paragraphs:
-                paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-def create_docx_report(user_name, summary, ai_review, logo_path="logo.png"):
-    doc = Document()
-
-    # --- COVER/TITLE ROW WITH LOGO ---
-    table = doc.add_table(rows=1, cols=2)
-    table.autofit = False
-    cell_title = table.cell(0, 0)
-    cell_logo = table.cell(0, 1)
-    cell_title.text = "ECR Report"
-    cell_title.paragraphs[0].runs[0].font.size = Pt(22)
-    cell_title.paragraphs[0].runs[0].font.bold = True
-    cell_title.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.LEFT
+    # --- LOGO AND TITLE ---
+    table_data = []
     try:
-        cell_logo.paragraphs[0].add_run().add_picture(logo_path, width=Inches(1.1))
-        cell_logo.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        img = Image(logo_path, width=60, height=60)
+        table_data.append([Paragraph('<b>ECR Report</b>', styleH), img])
     except Exception:
-        pass
-    set_column_widths(table, [4.5, 1.5])
-    doc.add_paragraph(f"Prepared for: {user_name}", style='Intense Quote')
-    doc.add_paragraph("")
+        table_data.append([Paragraph('<b>ECR Report</b>', styleH), ""])
+    t = Table(table_data, colWidths=[400, 60])
+    elements.append(t)
+    elements.append(Spacer(1, 12))
+    elements.append(Paragraph(f"Prepared for: {user_name}", styles['Italic']))
+    elements.append(Spacer(1, 12))
 
     # --- SUMMARY SECTION ---
-    doc.add_heading("Summary", level=1)
+    elements.append(Paragraph('<b>Summary</b>', styleH))
     summary_text = get_summary_section(ai_review)
-    p = doc.add_paragraph(summary_text)
-    p.runs[0].font.color.rgb = RGBColor(255, 103, 31)  # saffron/orange
-    doc.add_paragraph("")
+    elements.append(Paragraph(summary_text, ParagraphStyle('summary', textColor=colors.HexColor("#FF671F"), fontSize=11)))
+    elements.append(Spacer(1, 12))
 
     # --- USER DOCUMENT CLASSIFICATION TABLE ---
-    doc.add_heading("User Document Classification Summary", level=1)
+    elements.append(Paragraph('<b>User Document Classification Summary</b>', styleH))
     if summary:
-        table = doc.add_table(rows=1, cols=3, style="Table Grid")  # [4]
-        table.autofit = False
-        set_column_widths(table, [2.0, 2.5, 1.5])
-        hdr_cells = table.rows[0].cells
         headers = ['Expected Type', 'Detected In', 'Status']
-        for i, h in enumerate(headers):
-            cell = hdr_cells[i]
-            cell.text = h
-            run = cell.paragraphs[0].runs[0]
-            run.font.bold = True
-            run.font.color.rgb = RGBColor(6, 3, 141)
-            cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-        for row in summary:
-            row_cells = table.add_row().cells
-            row_cells[0].text = row['Expected Type']
-            row_cells[1].text = row['Detected In']
-            row_cells[2].text = row['Status']
-        format_table_cells(table)
+        data = [headers] + [[row['Expected Type'], row['Detected In'], row['Status']] for row in summary]
+        t = Table(data, colWidths=[110, 210, 110])
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#F0F2F6")),
+            ('TEXTCOLOR', (0,0), (-1,0), colors.HexColor("#06038D")),
+            ('ALIGN',(0,0),(-1,-1),'CENTER'),
+            ('GRID', (0,0), (-1,-1), 1, colors.HexColor("#06038D")),
+            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0,0), (-1,-1), 10),
+        ]))
+        elements.append(t)
     else:
-        doc.add_paragraph("No document summary available.")
-    doc.add_paragraph("")
+        elements.append(Paragraph("No document summary available.", styleN))
+    elements.append(Spacer(1, 12))
 
     # --- EXTRACT AND RENDER AI TABLES ---
     # 1. Required Documents Table
-    doc.add_heading("Required Documents Table", level=1)
+    elements.append(Paragraph('<b>Required Documents Table</b>', styleH))
     required_table_md = extract_first_table(extract_section(ai_review, "1."))
     if required_table_md:
         headers, rows = parse_markdown_table(required_table_md)
         if headers and rows:
-            table = doc.add_table(rows=1, cols=len(headers), style="Table Grid")
-            table.autofit = False
-            set_column_widths(table, [max(1.5, 6/len(headers))]*len(headers))
-            for i, h in enumerate(headers):
-                cell = table.rows[0].cells[i]
-                cell.text = h
-                run = cell.paragraphs[0].runs[0]
-                run.font.bold = True
-                run.font.color.rgb = RGBColor(6, 3, 141)
-                cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-            for row in rows:
-                cells = table.add_row().cells
-                for i, val in enumerate(row):
-                    cells[i].text = val
-            format_table_cells(table)
+            data = [headers] + rows
+            t = Table(data, colWidths=[max(80, 500//len(headers))]*len(headers))
+            t.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#F0F2F6")),
+                ('TEXTCOLOR', (0,0), (-1,0), colors.HexColor("#06038D")),
+                ('ALIGN',(0,0),(-1,-1),'CENTER'),
+                ('GRID', (0,0), (-1,-1), 1, colors.HexColor("#06038D")),
+                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0,0), (-1,-1), 10),
+            ]))
+            elements.append(t)
         else:
-            doc.add_paragraph("No required documents table found.")
+            elements.append(Paragraph("No required documents table found.", styleN))
     else:
-        doc.add_paragraph("No required documents table found.")
-    doc.add_paragraph("")
+        elements.append(Paragraph("No required documents table found.", styleN))
+    elements.append(Spacer(1, 12))
 
     # 2. Concerns & Explanation Table (from section 3)
-    doc.add_heading("Questionnaire English & Construction Concerns", level=1)
+    elements.append(Paragraph('<b>Questionnaire English & Construction Concerns</b>', styleH))
     concerns_table_md = extract_first_table(extract_section(ai_review, "3."))
     if concerns_table_md:
         headers, rows = parse_markdown_table(concerns_table_md)
         if headers and rows:
-            table = doc.add_table(rows=1, cols=len(headers), style="Table Grid")
-            table.autofit = False
-            set_column_widths(table, [max(1.5, 6/len(headers))]*len(headers))
-            for i, h in enumerate(headers):
-                cell = table.rows[0].cells[i]
-                cell.text = h
-                run = cell.paragraphs[0].runs[0]
-                run.font.bold = True
-                run.font.color.rgb = RGBColor(6, 3, 141)
-                cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-            for row in rows:
-                cells = table.add_row().cells
-                for i, val in enumerate(row):
-                    cells[i].text = val
-            format_table_cells(table)
+            data = [headers] + rows
+            t = Table(data, colWidths=[max(80, 500//len(headers))]*len(headers))
+            t.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#F0F2F6")),
+                ('TEXTCOLOR', (0,0), (-1,0), colors.HexColor("#06038D")),
+                ('ALIGN',(0,0),(-1,-1),'CENTER'),
+                ('GRID', (0,0), (-1,-1), 1, colors.HexColor("#06038D")),
+                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0,0), (-1,-1), 10),
+            ]))
+            elements.append(t)
         else:
-            doc.add_paragraph("No concerns table found.")
+            elements.append(Paragraph("No concerns table found.", styleN))
     else:
-        doc.add_paragraph("No concerns table found.")
-    doc.add_paragraph("")
+        elements.append(Paragraph("No concerns table found.", styleN))
+    elements.append(Spacer(1, 12))
 
     # --- REMAINING SECTIONS (2, 4, 5, 6) ---
     for section_num, section_title in [
@@ -235,23 +213,18 @@ def create_docx_report(user_name, summary, ai_review, logo_path="logo.png"):
         ("5.", "Other Aspects"),
         ("6.", "Overall Recommendation"),
     ]:
-        doc.add_heading(section_title, level=1)
+        elements.append(Paragraph(f'<b>{section_title}</b>', styleH))
         section_text = extract_section(ai_review, section_num)
-        doc.add_paragraph(section_text if section_text else "No information provided.")
-        doc.add_paragraph("")
+        elements.append(Paragraph(section_text if section_text else "No information provided.", styleN))
+        elements.append(Spacer(1, 12))
 
     # --- FOOTER ---
-    section = doc.sections[0]
-    footer = section.footer
-    footer_para = footer.paragraphs[0]
-    footer_para.text = "©copyright SSO Consultants"
-    footer_para.alignment = 1  # Center
+    elements.append(Spacer(1, 24))
+    elements.append(Paragraph('<para align="center" color="#FF671F">©copyright SSO Consultants</para>', styleN))
 
-    # --- STYLE ---
-    for paragraph in doc.paragraphs:
-        for run in paragraph.runs:
-            run.font.size = Pt(11)
-    return doc
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer
 
 # --- MAIN LOGIC ---
 
@@ -374,18 +347,15 @@ if run_review and uploaded_files and user_name:
         st.write(f"Hello {user_name}, here is your review:")
         st.write(ai_review)
 
-        # --- CREATE STRUCTURED DOCX REPORT ---
-        doc = create_docx_report(user_name, summary, ai_review)
-        bio = BytesIO()
-        doc.save(bio)
-        bio.seek(0)
-        file_name = f"{user_name.replace(' ', '_')}_ECR_Report.docx"
+        # --- CREATE STRUCTURED PDF REPORT ---
+        pdf_buffer = create_pdf_report(user_name, summary, ai_review)
+        file_name = f"{user_name.replace(' ', '_')}_ECR_Report.pdf"
         st.download_button(
-            label="Download ECR Report as Word (.docx)",
-            data=bio,
+            label="Download ECR Report as PDF",
+            data=pdf_buffer,
             file_name=file_name,
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            key=file_name  # Ensures the download button updates with new data
+            mime="application/pdf",
+            key=file_name
         )
 
 elif run_review and not user_name:
