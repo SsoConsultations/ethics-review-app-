@@ -105,6 +105,12 @@ def get_summary_section(ai_review):
     lines = ai_review.strip().split("\n")
     return "\n".join(lines[:4]) if lines else "No summary provided."
 
+def extract_additional_section(text, section_title):
+    # For sections like "English and construction of the questionnaire", etc.
+    pattern = rf"{section_title}[\.\:]*\s*(.*?)(?=\n\S|\Z)"
+    match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+    return match.group(1).strip() if match else ""
+
 def create_pdf_report(user_name, ai_review, logo_path="logo.png"):
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=30, leftMargin=30, topMargin=40, bottomMargin=30)
@@ -127,6 +133,13 @@ def create_pdf_report(user_name, ai_review, logo_path="logo.png"):
     elements.append(Spacer(1, 12))
     elements.append(Paragraph(f"Prepared for: {user_name}", styles['Italic']))
     elements.append(Spacer(1, 12))
+
+    # --- MISSING/MISLABELED DOCUMENTS WARNING (if present) ---
+    # Extract the first paragraph if it mentions missing/mislabeled docs
+    first_lines = ai_review.strip().split('\n')
+    if first_lines and ('missing' in first_lines[0].lower() or 'mislabeled' in first_lines[0].lower()):
+        elements.append(Paragraph(f"<b>Attention:</b> {first_lines[0]}", ParagraphStyle('warning', textColor=colors.red, fontSize=11)))
+        elements.append(Spacer(1, 12))
 
     # --- TABLES FOR EACH GUIDELINE ---
     guidelines = [
@@ -158,6 +171,43 @@ def create_pdf_report(user_name, ai_review, logo_path="logo.png"):
         else:
             elements.append(Paragraph("No table found for this guideline.", styleN))
         elements.append(Spacer(1, 12))
+
+    # --- ADDITIONAL ANALYSIS SECTIONS ---
+    # English and construction of the questionnaire
+    elements.append(Paragraph('<b>English and Construction of the Questionnaire</b>', styleH))
+    section_text = extract_additional_section(ai_review, "English and construction of the questionnaire")
+    table_md = extract_first_table(section_text)
+    if table_md:
+        headers, rows = parse_markdown_table(table_md)
+        if headers and rows:
+            data = [headers] + rows
+            t = Table(data, colWidths=[180, 180, 110])
+            t.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#F0F2F6")),
+                ('TEXTCOLOR', (0,0), (-1,0), colors.HexColor("#06038D")),
+                ('ALIGN',(0,0),(-1,-1),'CENTER'),
+                ('GRID', (0,0), (-1,-1), 1, colors.HexColor("#06038D")),
+                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0,0), (-1,-1), 10),
+            ]))
+            elements.append(t)
+        else:
+            elements.append(Paragraph("No concerns table found.", styleN))
+    else:
+        elements.append(Paragraph("No concerns table found.", styleN))
+    elements.append(Spacer(1, 12))
+
+    # Alignment of questionnaire and consent with research proposal
+    elements.append(Paragraph('<b>Alignment with Research Proposal</b>', styleH))
+    section_text = extract_additional_section(ai_review, "alignment with the research proposal")
+    elements.append(Paragraph(section_text if section_text else "No information provided.", styleN))
+    elements.append(Spacer(1, 12))
+
+    # Other aspects
+    elements.append(Paragraph('<b>Other Relevant Aspects</b>', styleH))
+    section_text = extract_additional_section(ai_review, "other aspect")
+    elements.append(Paragraph(section_text if section_text else "No additional aspects provided.", styleN))
+    elements.append(Spacer(1, 12))
 
     # --- SUMMARY & RECOMMENDATION ---
     elements.append(Paragraph('<b>Summary & Recommendation</b>', styleH))
@@ -193,39 +243,54 @@ if run_review and uploaded_files and user_name:
         for doc in user_docs:
             user_documents_text += f"{doc['filename']}:\n{doc['text'][:1500]}\n\n"
 
-        # --- IMPROVED PROMPT ENGINEERING ---
+        # --- UNIFIED PROMPT ---
         ethics_prompt = f"""
-You are an expert in Indian research ethics committee review. Your task is to review the user’s submission against three baseline reference documents:
+You are an expert in Indian research ethics committee review. Your role is to analyze the user's submission against three baseline reference documents:
 
 1. ICMR National Ethical Guidelines for Biomedical and Health Research involving Human Participants (2017)
 2. ICMR National Guidelines for Ethics Committees Reviewing Biomedical & Health Research during COVID-19 Pandemic (2020)
 3. CDSCO Good Clinical Practice Guidelines (2001)
 
-Instructions:
+**Instructions:**
+
+- If any required user document is missing, or if a document appears to be mislabeled (e.g., a "Questionnaire" that looks like a "Research Proposal"), clearly state this at the very beginning and suggest which document(s) need to be uploaded or corrected.
+
 - For each of the three reference documents above, create a table with three columns:
-    | Section/Clause | Does the user submission comply? (Yes/No/Partial) | Explanation |
-- The first column should reference the relevant section or clause of the guideline.
-- The second column should state whether the user’s submission is compliant, non-compliant, or partially compliant.
-- The third column should briefly explain your assessment for each section or clause.
-- Only include the most relevant and critical sections/clauses from each guideline (do not include the entire guideline).
-- All tables must be valid markdown. Every row (header and data) must start and end with the '|' character. The header separator line must also start and end with '|'.
+    | Section/Clause | Compliance (Yes/No/Partial) | Explanation |
+  - The first column should reference the most relevant section or clause of the guideline.
+  - The second column should state whether the user's submission is compliant, non-compliant, or partially compliant.
+  - The third column should briefly explain your assessment for each section or clause.
+  - Only include the most critical and relevant sections/clauses from each guideline (do not include the entire guideline).
+
+**Markdown Table Formatting Rules:**
+- All tables must be valid markdown.
+- Every row (header and data) must start and end with the '|' character.
+- The header separator line must also start and end with '|'.
 - Example:
-    | Section/Clause | Compliant? | Explanation |
-    |---------------|------------|-------------|
+    | Section/Clause | Compliance (Yes/No/Partial) | Explanation |
+    |---------------|-----------------------------|-------------|
     | 4.2 Informed Consent | Yes | User provided a valid consent form. |
-- Place each table only in the section for its respective guideline.
 
-After the three tables, provide a concise summary and an overall recommendation for the user’s submission.
+**Table Placement Rules:**
+- Place each table only in the section for its respective guideline, clearly labeled with the guideline name as a heading.
+- Do not repeat or place tables in any other section.
 
-Do not repeat or place tables in any other section.
+**Additional Analysis:**
+- After the three tables, provide:
+    - A concise summary and overall recommendation for the user's submission (in plain text, not a table).
+    - A section on English and construction of the questionnaire, highlighting any concerns in a markdown table (if applicable).
+    - An assessment of whether the questionnaire and informed consent align with the research proposal.
+    - Any other relevant aspects you wish to highlight.
+    - Any additional questions to ask the user, with brief explanations.
 
 ---
 
-User Submission:
+**User Submission (for review):**
 {user_documents_text}
 
 ---
-Reference Documents (for your use):
+
+**Reference Documents (for your use):**
 1. ICMR National Ethical Guidelines for Biomedical and Health Research involving Human Participants (2017)
 2. ICMR National Guidelines for Ethics Committees Reviewing Biomedical & Health Research during COVID-19 Pandemic (2020)
 3. CDSCO Good Clinical Practice Guidelines (2001)
