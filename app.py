@@ -6,12 +6,28 @@ import pandas as pd
 from io import BytesIO
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 # --- SIDEBAR WITH LOGO AND COMPANY INFO ---
 with st.sidebar:
     st.image("logo.png", width=120)
     st.markdown("<h3 style='color:#06038D;'>ECR SYSTEM</h3>", unsafe_allow_html=True)
     st.markdown("<span style='color:#FF671F;'>Powered by SSO Consultants</span>", unsafe_allow_html=True)
+
+# --- BORDER START ---
+st.markdown("""
+    <style>
+    .main-container {
+        border: 3px solid #06038D;
+        border-radius: 15px;
+        padding: 30px 30px 10px 30px;
+        background-color: #FFFFFF;
+        margin-bottom: 30px;
+        box-shadow: 0 4px 24px rgba(6,3,141,0.08);
+    }
+    </style>
+    <div class="main-container">
+""", unsafe_allow_html=True)
 
 # --- HEADER WITH LOGO ---
 col1, col2 = st.columns([8, 1])
@@ -20,12 +36,10 @@ with col1:
 with col2:
     st.image("logo.png", width=80)
 
-# --- USER NAME INPUT ---
 user_name = st.text_input("Enter your name")
 if user_name:
     st.success(f"Welcome, {user_name}!")
 
-# --- FILE UPLOADER ---
 st.markdown(
     "<h4 style='color:#FF671F;'>Upload your documents (application, proposal, questionnaire, etc.):</h4>",
     unsafe_allow_html=True
@@ -37,6 +51,8 @@ uploaded_files = st.file_uploader(
 )
 
 run_review = st.button("Run Ethics Review")
+
+# --- HELPER FUNCTIONS ---
 
 def extract_text_from_pdf(file):
     pdf_reader = PyPDF2.PdfReader(file)
@@ -61,9 +77,6 @@ def classify_user_doc(text):
         return "Unknown"
 
 def parse_markdown_table(md_table):
-    """
-    Parses a markdown table and returns a list of headers and rows.
-    """
     lines = [line.strip() for line in md_table.strip().split('\n') if line.strip()]
     if len(lines) < 2 or "|" not in lines[0]:
         return [], []
@@ -76,53 +89,55 @@ def parse_markdown_table(md_table):
                 rows.append(row)
     return headers, rows
 
-def extract_section(text, section_title):
-    """
-    Extracts a section from the AI output by section title.
-    """
+def extract_section(text, section_number):
     import re
-    pattern = rf"{section_title}\s*(.*?)(?=\n\d+\.\s|$)"
+    pattern = rf"\n{section_number}\s*(.*?)(?=\n\d+\.\s|$)"
     match = re.search(pattern, text, re.DOTALL)
     return match.group(1).strip() if match else ""
 
 def extract_first_table(text):
-    """
-    Extracts the first markdown table from text.
-    """
     import re
     table_pattern = r"(\|.+\|\n\|[-\s|:]+\|\n(?:\|.*\|\n?)+)"
     match = re.search(table_pattern, text)
     return match.group(1).strip() if match else ""
 
 def get_summary_section(ai_review):
-    """
-    Extracts a summary or highlights section from the AI review.
-    If not found, returns a default message.
-    """
-    # Try to find a summary or highlights section
     import re
     summary_pattern = r"(Summary|Highlights|Key Findings)[:\n]+(.+?)(?=\n\d+\.\s|$)"
     match = re.search(summary_pattern, ai_review, re.IGNORECASE | re.DOTALL)
     if match:
         return match.group(2).strip()
-    # Otherwise, take the first 3-4 lines as a summary
     lines = ai_review.strip().split("\n")
     return "\n".join(lines[:4]) if lines else "No summary provided."
+
+def set_column_widths(table, widths):
+    for col, width in zip(table.columns, widths):
+        col.width = Inches(width)
+
+def format_table_cells(table):
+    for row in table.rows:
+        for cell in row.cells:
+            for paragraph in cell.paragraphs:
+                paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
 def create_docx_report(user_name, summary, ai_review, logo_path="logo.png"):
     doc = Document()
 
     # --- COVER/TITLE ROW WITH LOGO ---
     table = doc.add_table(rows=1, cols=2)
+    table.autofit = False
     cell_title = table.cell(0, 0)
     cell_logo = table.cell(0, 1)
     cell_title.text = "ECR Report"
     cell_title.paragraphs[0].runs[0].font.size = Pt(22)
     cell_title.paragraphs[0].runs[0].font.bold = True
+    cell_title.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.LEFT
     try:
         cell_logo.paragraphs[0].add_run().add_picture(logo_path, width=Inches(1.1))
+        cell_logo.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
     except Exception:
         pass
+    set_column_widths(table, [4.5, 1.5])
     doc.add_paragraph(f"Prepared for: {user_name}", style='Intense Quote')
     doc.add_paragraph("")
 
@@ -136,21 +151,24 @@ def create_docx_report(user_name, summary, ai_review, logo_path="logo.png"):
     # --- USER DOCUMENT CLASSIFICATION TABLE ---
     doc.add_heading("User Document Classification Summary", level=1)
     if summary:
-        table = doc.add_table(rows=1, cols=3)
+        table = doc.add_table(rows=1, cols=3, style="Table Grid")  # [4]
+        table.autofit = False
+        set_column_widths(table, [2.0, 2.5, 1.5])
         hdr_cells = table.rows[0].cells
-        hdr_cells[0].text = 'Expected Type'
-        hdr_cells[1].text = 'Detected In'
-        hdr_cells[2].text = 'Status'
-        for cell in hdr_cells:
-            for paragraph in cell.paragraphs:
-                for run in paragraph.runs:
-                    run.font.bold = True
-                    run.font.color.rgb = RGBColor(6, 3, 141)  # blue
+        headers = ['Expected Type', 'Detected In', 'Status']
+        for i, h in enumerate(headers):
+            cell = hdr_cells[i]
+            cell.text = h
+            run = cell.paragraphs[0].runs[0]
+            run.font.bold = True
+            run.font.color.rgb = RGBColor(6, 3, 141)
+            cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
         for row in summary:
             row_cells = table.add_row().cells
             row_cells[0].text = row['Expected Type']
             row_cells[1].text = row['Detected In']
             row_cells[2].text = row['Status']
+        format_table_cells(table)
     else:
         doc.add_paragraph("No document summary available.")
     doc.add_paragraph("")
@@ -162,17 +180,21 @@ def create_docx_report(user_name, summary, ai_review, logo_path="logo.png"):
     if required_table_md:
         headers, rows = parse_markdown_table(required_table_md)
         if headers and rows:
-            table = doc.add_table(rows=1, cols=len(headers))
+            table = doc.add_table(rows=1, cols=len(headers), style="Table Grid")
+            table.autofit = False
+            set_column_widths(table, [max(1.5, 6/len(headers))]*len(headers))
             for i, h in enumerate(headers):
                 cell = table.rows[0].cells[i]
                 cell.text = h
-                for run in cell.paragraphs[0].runs:
-                    run.font.bold = True
-                    run.font.color.rgb = RGBColor(6, 3, 141)
+                run = cell.paragraphs[0].runs[0]
+                run.font.bold = True
+                run.font.color.rgb = RGBColor(6, 3, 141)
+                cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
             for row in rows:
                 cells = table.add_row().cells
                 for i, val in enumerate(row):
                     cells[i].text = val
+            format_table_cells(table)
         else:
             doc.add_paragraph("No required documents table found.")
     else:
@@ -185,17 +207,21 @@ def create_docx_report(user_name, summary, ai_review, logo_path="logo.png"):
     if concerns_table_md:
         headers, rows = parse_markdown_table(concerns_table_md)
         if headers and rows:
-            table = doc.add_table(rows=1, cols=len(headers))
+            table = doc.add_table(rows=1, cols=len(headers), style="Table Grid")
+            table.autofit = False
+            set_column_widths(table, [max(1.5, 6/len(headers))]*len(headers))
             for i, h in enumerate(headers):
                 cell = table.rows[0].cells[i]
                 cell.text = h
-                for run in cell.paragraphs[0].runs:
-                    run.font.bold = True
-                    run.font.color.rgb = RGBColor(6, 3, 141)
+                run = cell.paragraphs[0].runs[0]
+                run.font.bold = True
+                run.font.color.rgb = RGBColor(6, 3, 141)
+                cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
             for row in rows:
                 cells = table.add_row().cells
                 for i, val in enumerate(row):
                     cells[i].text = val
+            format_table_cells(table)
         else:
             doc.add_paragraph("No concerns table found.")
     else:
@@ -226,6 +252,8 @@ def create_docx_report(user_name, summary, ai_review, logo_path="logo.png"):
         for run in paragraph.runs:
             run.font.size = Pt(11)
     return doc
+
+# --- MAIN LOGIC ---
 
 if run_review and uploaded_files and user_name:
     with st.spinner("Processing your documents and submitting to GPT..."):
@@ -356,13 +384,17 @@ if run_review and uploaded_files and user_name:
             label="Download ECR Report as Word (.docx)",
             data=bio,
             file_name=file_name,
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            key=file_name  # Ensures the download button updates with new data
         )
 
 elif run_review and not user_name:
     st.warning("Please enter your name above to proceed.")
 elif run_review and not uploaded_files:
     st.warning("Please upload at least one document to proceed.")
+
+# --- BORDER END ---
+st.markdown("</div>", unsafe_allow_html=True)
 
 # --- FOOTER ---
 st.markdown(
