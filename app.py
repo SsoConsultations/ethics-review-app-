@@ -13,21 +13,6 @@ with st.sidebar:
     st.markdown("<h3 style='color:#06038D;'>ECR SYSTEM</h3>", unsafe_allow_html=True)
     st.markdown("<span style='color:#FF671F;'>Powered by SSO Consultants</span>", unsafe_allow_html=True)
 
-# --- BORDER START ---
-st.markdown("""
-    <style>
-    .main-container {
-        border: 3px solid #06038D;
-        border-radius: 15px;
-        padding: 30px 30px 10px 30px;
-        background-color: #FFFFFF;
-        margin-bottom: 30px;
-        box-shadow: 0 4px 24px rgba(6,3,141,0.08);
-    }
-    </style>
-    <div class="main-container">
-""", unsafe_allow_html=True)
-
 # --- HEADER WITH LOGO ---
 col1, col2 = st.columns([8, 1])
 with col1:
@@ -90,7 +75,6 @@ def parse_markdown_table(md_table):
 
 def extract_section(text, section_number):
     import re
-    # Matches text after \n{section_number}. up to the next \n\d+. or end of string
     pattern = rf"\n{section_number}\s*(.*?)(?=\n\d+\.\s|$)"
     match = re.search(pattern, text, re.DOTALL)
     return match.group(1).strip() if match else ""
@@ -360,16 +344,13 @@ if run_review and uploaded_files and user_name:
             data=bio,
             file_name=file_name,
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            key=file_name  # Ensures the download button updates with new data
+            key=file_name
         )
 
 elif run_review and not user_name:
     st.warning("Please enter your name above to proceed.")
 elif run_review and not uploaded_files:
     st.warning("Please upload at least one document to proceed.")
-
-# --- BORDER END ---
-st.markdown("</div>", unsafe_allow_html=True)
 
 # --- FOOTER ---
 st.markdown(
