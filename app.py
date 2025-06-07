@@ -8,6 +8,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
+import re
 
 # --- SIDEBAR WITH LOGO AND COMPANY INFO ---
 with st.sidebar:
@@ -77,34 +78,44 @@ def classify_user_doc(text):
     else:
         return "Unknown"
 
+def clean_table_lines(md_table):
+    lines = md_table.strip().split('\n')
+    cleaned = []
+    for line in lines:
+        # If line starts with | but doesn't end with |, add it
+        if line.startswith('|') and not line.endswith('|'):
+            line += '|'
+        cleaned.append(line)
+    return '\n'.join(cleaned)
+
+def extract_first_table(text):
+    # More robust regex for markdown tables
+    table_pattern = r"(\|.*?\|\n\|[-| :]+\|\n(?:\|.*?\|\n?)+)"
+    match = re.search(table_pattern, text, re.DOTALL)
+    if match:
+        return clean_table_lines(match.group(1).strip())
+    return ""
+
 def parse_markdown_table(md_table):
-    lines = [line.strip() for line in md_table.strip().split('\n') if line.strip()]
-    if len(lines) < 2 or "|" not in lines[0]:
+    lines = [line.strip() for line in md_table.strip().split('\n') if '|' in line]
+    if len(lines) < 2:
         return [], []
-    headers = [h.strip() for h in lines[0].split("|") if h.strip()]
+    headers = [h.strip() for h in lines[0].split('|')[1:-1]]
     rows = []
     for line in lines[2:]:
-        if "|" in line:
-            row = [c.strip() for c in line.split("|") if c.strip()]
-            if row:
-                rows.append(row)
+        row = [c.strip() for c in line.split('|')[1:-1]]
+        if row and any(cell != "" for cell in row):
+            rows.append(row)
     return headers, rows
 
 def extract_section(text, section_number):
-    import re
-    pattern = rf"\n{section_number}\s*(.*?)(?=\n\d+\.\s|$)"
+    # More robust: period after number is optional
+    pattern = rf"\n{section_number}\.?\s*(.*?)(?=\n\d+\.?\s|$)"
     match = re.search(pattern, text, re.DOTALL)
     return match.group(1).strip() if match else ""
 
-def extract_first_table(text):
-    import re
-    table_pattern = r"(\|.+\|\n\|[-\s|:]+\|\n(?:\|.*\|\n?)+)"
-    match = re.search(table_pattern, text)
-    return match.group(1).strip() if match else ""
-
 def get_summary_section(ai_review):
-    import re
-    summary_pattern = r"(Summary|Highlights|Key Findings)[:\n]+(.+?)(?=\n\d+\.\s|$)"
+    summary_pattern = r"(Summary|Highlights|Key Findings)[:\n]+(.+?)(?=\n\d+\.?\s|$)"
     match = re.search(summary_pattern, ai_review, re.IGNORECASE | re.DOTALL)
     if match:
         return match.group(2).strip()
@@ -162,7 +173,7 @@ def create_pdf_report(user_name, summary, ai_review, logo_path="logo.png"):
     # --- EXTRACT AND RENDER AI TABLES ---
     # 1. Required Documents Table
     elements.append(Paragraph('<b>Required Documents Table</b>', styleH))
-    required_table_md = extract_first_table(extract_section(ai_review, "1."))
+    required_table_md = extract_first_table(extract_section(ai_review, "1"))
     if required_table_md:
         headers, rows = parse_markdown_table(required_table_md)
         if headers and rows:
@@ -185,7 +196,7 @@ def create_pdf_report(user_name, summary, ai_review, logo_path="logo.png"):
 
     # 2. Concerns & Explanation Table (from section 3)
     elements.append(Paragraph('<b>Questionnaire English & Construction Concerns</b>', styleH))
-    concerns_table_md = extract_first_table(extract_section(ai_review, "3."))
+    concerns_table_md = extract_first_table(extract_section(ai_review, "3"))
     if concerns_table_md:
         headers, rows = parse_markdown_table(concerns_table_md)
         if headers and rows:
@@ -208,10 +219,10 @@ def create_pdf_report(user_name, summary, ai_review, logo_path="logo.png"):
 
     # --- REMAINING SECTIONS (2, 4, 5, 6) ---
     for section_num, section_title in [
-        ("2.", "Ethics Compliance"),
-        ("4.", "Alignment Check"),
-        ("5.", "Other Aspects"),
-        ("6.", "Overall Recommendation"),
+        ("2", "Ethics Compliance"),
+        ("4", "Alignment Check"),
+        ("5", "Other Aspects"),
+        ("6", "Overall Recommendation"),
     ]:
         elements.append(Paragraph(f'<b>{section_title}</b>', styleH))
         section_text = extract_section(ai_review, section_num)
@@ -307,31 +318,42 @@ if run_review and uploaded_files and user_name:
         for doc in reference_docs:
             reference_documents_text += f"{doc['filename']}:\n{doc['text'][:1500]}\n\n"
 
+        # --- IMPROVED PROMPT ENGINEERING ---
         ethics_prompt = f"""
-        You are an expert in India-related ethics committee working. You will provide answers based only on the reference documents provided below, except for English and grammar, where you may use your own expertise or other references.
+You are an expert in India-related ethics committee working. You will provide answers based only on the reference documents provided below, except for English and grammar, where you may use your own expertise or other references.
 
-        If any required user document is missing, or if a document appears to be mislabeled (e.g., the content of a file uploaded as "Questionnaire" looks like a "Research Proposal"), please point this out clearly at the beginning of your response, and suggest to the user which document(s) need to be uploaded or corrected.
+**IMPORTANT INSTRUCTIONS FOR TABLES:**
+- All tables must be valid markdown.
+- Every row (header and data) must start and end with the '|' character.
+- The header separator line must also start and end with '|'.
+- Example:
+| Column 1 | Column 2 |
+|----------|----------|
+| Data A   | Data B   |
 
-        Your task is to review the following uploaded documents and provide a detailed analysis as per these points:
+- Tables must only appear in the explicitly requested numbered sections (e.g., Section 1 for Required Documents).
+- Do not repeat or place tables in any other section.
 
-        1. Are all the required documents provided? Present this in a tabular format.
-        2. Does this proposal meet ethics requirements as per the reference documents? Give section-wise compliance or non-compliance, with explanations where it is non-compliant.
-        3. Compare the English and construction of the questionnaire and highlight any concerns (present in a table).
-        4. Does the questionnaire and informed consent align with the research proposal?
-        5. Any other aspect that you might want to highlight.
-        6. Overall recommendation and questions to ask (and why).
+Your task is to review the following uploaded documents and provide a detailed analysis as per these points:
 
-        Please start your answer with a 2-3 line summary of your findings.
+1. Are all the required documents provided? Present this in a markdown table as shown above.
+2. Does this proposal meet ethics requirements as per the reference documents? Give section-wise compliance or non-compliance, with explanations where it is non-compliant.
+3. Compare the English and construction of the questionnaire and highlight any concerns (present in a markdown table as shown above).
+4. Does the questionnaire and informed consent align with the research proposal?
+5. Any other aspect that you might want to highlight.
+6. Overall recommendation and questions to ask (and why).
 
-        User Name:
-        {user_name}
+Please start your answer with a 2-3 line summary of your findings.
 
-        User Documents:
-        {user_documents_text}
+User Name:
+{user_name}
 
-        Reference Documents:
-        {reference_documents_text}
-        """
+User Documents:
+{user_documents_text}
+
+Reference Documents:
+{reference_documents_text}
+"""
 
         # --- CALL OPENAI ---
         client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
