@@ -63,16 +63,33 @@ def extract_text_from_pdf(file):
         text += page.extract_text() or ""
     return text
 
+def classify_user_doc(text):
+    text_lower = text.lower()
+    if "informed consent" in text_lower:
+        return "Informed Consent"
+    elif "questionnaire" in text_lower or "survey" in text_lower:
+        return "Questionnaire"
+    elif "research proposal" in text_lower or "introduction" in text_lower:
+        return "Research Proposal"
+    elif "application" in text_lower:
+        return "Application Form"
+    elif "rac" in text_lower and "confirmation" in text_lower:
+        return "RAC Confirmation Letter"
+    else:
+        return "Unknown"
+
 def clean_table_lines(md_table):
     lines = md_table.strip().split('\n')
     cleaned = []
     for line in lines:
+        # If line starts with | but doesn't end with |, add it
         if line.startswith('|') and not line.endswith('|'):
             line += '|'
         cleaned.append(line)
     return '\n'.join(cleaned)
 
 def extract_first_table(text):
+    # More robust regex for markdown tables
     table_pattern = r"(\|.*?\|\n\|[-| :]+\|\n(?:\|.*?\|\n?)+)"
     match = re.search(table_pattern, text, re.DOTALL)
     if match:
@@ -91,27 +108,21 @@ def parse_markdown_table(md_table):
             rows.append(row)
     return headers, rows
 
-def extract_section(text, section_title):
-    # Extracts section by title or number (case-insensitive)
-    pattern = rf"{section_title}[\.\:]*\s*(.*?)(?=\n\S|\Z)"
-    match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+def extract_section(text, section_number):
+    # More robust: period after number is optional
+    pattern = rf"\n{section_number}\.?\s*(.*?)(?=\n\d+\.?\s|$)"
+    match = re.search(pattern, text, re.DOTALL)
     return match.group(1).strip() if match else ""
 
 def get_summary_section(ai_review):
-    summary_pattern = r"(Summary|Recommendation|Highlights)[:\n]+(.+?)(?=\n\S|\Z)"
+    summary_pattern = r"(Summary|Highlights|Key Findings)[:\n]+(.+?)(?=\n\d+\.?\s|$)"
     match = re.search(summary_pattern, ai_review, re.IGNORECASE | re.DOTALL)
     if match:
         return match.group(2).strip()
     lines = ai_review.strip().split("\n")
     return "\n".join(lines[:4]) if lines else "No summary provided."
 
-def extract_additional_section(text, section_title):
-    # For sections like "English and construction of the questionnaire", etc.
-    pattern = rf"{section_title}[\.\:]*\s*(.*?)(?=\n\S|\Z)"
-    match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
-    return match.group(1).strip() if match else ""
-
-def create_pdf_report(user_name, ai_review, logo_path="logo.png"):
+def create_pdf_report(user_name, summary, ai_review, logo_path="logo.png"):
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=30, leftMargin=30, topMargin=40, bottomMargin=30)
     elements = []
@@ -134,54 +145,63 @@ def create_pdf_report(user_name, ai_review, logo_path="logo.png"):
     elements.append(Paragraph(f"Prepared for: {user_name}", styles['Italic']))
     elements.append(Spacer(1, 12))
 
-    # --- MISSING/MISLABELED DOCUMENTS WARNING (if present) ---
-    # Extract the first paragraph if it mentions missing/mislabeled docs
-    first_lines = ai_review.strip().split('\n')
-    if first_lines and ('missing' in first_lines[0].lower() or 'mislabeled' in first_lines[0].lower()):
-        elements.append(Paragraph(f"<b>Attention:</b> {first_lines[0]}", ParagraphStyle('warning', textColor=colors.red, fontSize=11)))
-        elements.append(Spacer(1, 12))
+    # --- SUMMARY SECTION ---
+    elements.append(Paragraph('<b>Summary</b>', styleH))
+    summary_text = get_summary_section(ai_review)
+    elements.append(Paragraph(summary_text, ParagraphStyle('summary', textColor=colors.HexColor("#FF671F"), fontSize=11)))
+    elements.append(Spacer(1, 12))
 
-    # --- TABLES FOR EACH GUIDELINE ---
-    guidelines = [
-        ("ICMR National Ethical Guidelines for Biomedical and Health Research involving Human Participants (2017)", "ICMR National Ethical Guidelines"),
-        ("ICMR National Guidelines for Ethics Committees Reviewing Biomedical & Health Research during COVID-19 Pandemic (2020)", "ICMR National Guidelines for Ethics Committees"),
-        ("CDSCO Good Clinical Practice Guidelines (2001)", "CDSCO Good Clinical Practice Guidelines"),
-    ]
+    # --- USER DOCUMENT CLASSIFICATION TABLE ---
+    elements.append(Paragraph('<b>User Document Classification Summary</b>', styleH))
+    if summary:
+        headers = ['Expected Type', 'Detected In', 'Status']
+        data = [headers] + [[row['Expected Type'], row['Detected In'], row['Status']] for row in summary]
+        t = Table(data, colWidths=[110, 210, 110])
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#F0F2F6")),
+            ('TEXTCOLOR', (0,0), (-1,0), colors.HexColor("#06038D")),
+            ('ALIGN',(0,0),(-1,-1),'CENTER'),
+            ('GRID', (0,0), (-1,-1), 1, colors.HexColor("#06038D")),
+            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0,0), (-1,-1), 10),
+        ]))
+        elements.append(t)
+    else:
+        elements.append(Paragraph("No document summary available.", styleN))
+    elements.append(Spacer(1, 12))
 
-    for title, section_title in guidelines:
-        elements.append(Paragraph(f'<b>{title}</b>', styleH))
-        section_text = extract_section(ai_review, section_title)
-        table_md = extract_first_table(section_text)
-        if table_md:
-            headers, rows = parse_markdown_table(table_md)
-            if headers and rows:
-                data = [headers] + rows
-                t = Table(data, colWidths=[150, 120, 200])
-                t.setStyle(TableStyle([
-                    ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#F0F2F6")),
-                    ('TEXTCOLOR', (0,0), (-1,0), colors.HexColor("#06038D")),
-                    ('ALIGN',(0,0),(-1,-1),'CENTER'),
-                    ('GRID', (0,0), (-1,-1), 1, colors.HexColor("#06038D")),
-                    ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                    ('FONTSIZE', (0,0), (-1,-1), 10),
-                ]))
-                elements.append(t)
-            else:
-                elements.append(Paragraph("No table found for this guideline.", styleN))
-        else:
-            elements.append(Paragraph("No table found for this guideline.", styleN))
-        elements.append(Spacer(1, 12))
-
-    # --- ADDITIONAL ANALYSIS SECTIONS ---
-    # English and construction of the questionnaire
-    elements.append(Paragraph('<b>English and Construction of the Questionnaire</b>', styleH))
-    section_text = extract_additional_section(ai_review, "English and construction of the questionnaire")
-    table_md = extract_first_table(section_text)
-    if table_md:
-        headers, rows = parse_markdown_table(table_md)
+    # --- EXTRACT AND RENDER AI TABLES ---
+    # 1. Required Documents Table
+    elements.append(Paragraph('<b>Required Documents Table</b>', styleH))
+    required_table_md = extract_first_table(extract_section(ai_review, "1"))
+    if required_table_md:
+        headers, rows = parse_markdown_table(required_table_md)
         if headers and rows:
             data = [headers] + rows
-            t = Table(data, colWidths=[180, 180, 110])
+            t = Table(data, colWidths=[max(80, 500//len(headers))]*len(headers))
+            t.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#F0F2F6")),
+                ('TEXTCOLOR', (0,0), (-1,0), colors.HexColor("#06038D")),
+                ('ALIGN',(0,0),(-1,-1),'CENTER'),
+                ('GRID', (0,0), (-1,-1), 1, colors.HexColor("#06038D")),
+                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0,0), (-1,-1), 10),
+            ]))
+            elements.append(t)
+        else:
+            elements.append(Paragraph("No required documents table found.", styleN))
+    else:
+        elements.append(Paragraph("No required documents table found.", styleN))
+    elements.append(Spacer(1, 12))
+
+    # 2. Concerns & Explanation Table (from section 3)
+    elements.append(Paragraph('<b>Questionnaire English & Construction Concerns</b>', styleH))
+    concerns_table_md = extract_first_table(extract_section(ai_review, "3"))
+    if concerns_table_md:
+        headers, rows = parse_markdown_table(concerns_table_md)
+        if headers and rows:
+            data = [headers] + rows
+            t = Table(data, colWidths=[max(80, 500//len(headers))]*len(headers))
             t.setStyle(TableStyle([
                 ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#F0F2F6")),
                 ('TEXTCOLOR', (0,0), (-1,0), colors.HexColor("#06038D")),
@@ -197,26 +217,22 @@ def create_pdf_report(user_name, ai_review, logo_path="logo.png"):
         elements.append(Paragraph("No concerns table found.", styleN))
     elements.append(Spacer(1, 12))
 
-    # Alignment of questionnaire and consent with research proposal
-    elements.append(Paragraph('<b>Alignment with Research Proposal</b>', styleH))
-    section_text = extract_additional_section(ai_review, "alignment with the research proposal")
-    elements.append(Paragraph(section_text if section_text else "No information provided.", styleN))
-    elements.append(Spacer(1, 12))
-
-    # Other aspects
-    elements.append(Paragraph('<b>Other Relevant Aspects</b>', styleH))
-    section_text = extract_additional_section(ai_review, "other aspect")
-    elements.append(Paragraph(section_text if section_text else "No additional aspects provided.", styleN))
-    elements.append(Spacer(1, 12))
-
-    # --- SUMMARY & RECOMMENDATION ---
-    elements.append(Paragraph('<b>Summary & Recommendation</b>', styleH))
-    summary_text = get_summary_section(ai_review)
-    elements.append(Paragraph(summary_text, ParagraphStyle('summary', textColor=colors.HexColor("#FF671F"), fontSize=11)))
-    elements.append(Spacer(1, 24))
+    # --- REMAINING SECTIONS (2, 4, 5, 6) ---
+    for section_num, section_title in [
+        ("2", "Ethics Compliance"),
+        ("4", "Alignment Check"),
+        ("5", "Other Aspects"),
+        ("6", "Overall Recommendation"),
+    ]:
+        elements.append(Paragraph(f'<b>{section_title}</b>', styleH))
+        section_text = extract_section(ai_review, section_num)
+        elements.append(Paragraph(section_text if section_text else "No information provided.", styleN))
+        elements.append(Spacer(1, 12))
 
     # --- FOOTER ---
+    elements.append(Spacer(1, 24))
     elements.append(Paragraph('<para align="center" color="#FF671F">©copyright SSO Consultants</para>', styleN))
+
     doc.build(elements)
     buffer.seek(0)
     return buffer
@@ -225,7 +241,36 @@ def create_pdf_report(user_name, ai_review, logo_path="logo.png"):
 
 if run_review and uploaded_files and user_name:
     with st.spinner("Processing your documents and submitting to GPT..."):
+        # --- LOAD AND PROCESS REFERENCE DOCS ---
+        REFERENCE_DOCS_PATH = "REFRENCE DOCS"
+        reference_docs = []
+        if os.path.exists(REFERENCE_DOCS_PATH):
+            for f in os.listdir(REFERENCE_DOCS_PATH):
+                if f.lower().endswith(('.pdf', '.txt')):
+                    file_path = os.path.join(REFERENCE_DOCS_PATH, f)
+                    if f.lower().endswith('.pdf'):
+                        with open(file_path, "rb") as file:
+                            text = extract_text_from_pdf(file)
+                    else:
+                        with open(file_path, "r", encoding="utf-8") as file:
+                            text = file.read()
+                    reference_docs.append({
+                        "filename": f,
+                        "text": text
+                    })
+
         # --- PROCESS USER UPLOADED DOCS ---
+        required_types = [
+            "Application Form",
+            "Research Proposal",
+            "Questionnaire",
+        ]
+        optional_types = [
+            "Informed Consent",
+            "RAC Confirmation Letter"
+        ]
+        all_types = required_types + optional_types
+
         user_docs = []
         for file in uploaded_files:
             if file.name.lower().endswith(".pdf"):
@@ -234,66 +279,80 @@ if run_review and uploaded_files and user_name:
                 text = file.read().decode("utf-8")
             else:
                 text = ""
+            doc_type = classify_user_doc(text)
             user_docs.append({
                 "filename": file.name,
+                "type_detected": doc_type,
                 "text": text
             })
 
+        # --- DOCUMENT SUMMARY TABLE ---
+        summary = []
+        for t in all_types:
+            found = False
+            for doc in user_docs:
+                if doc['type_detected'] == t:
+                    found = True
+                    summary.append({
+                        "Expected Type": t,
+                        "Detected In": doc['filename'],
+                        "Status": "OK"
+                    })
+            if not found:
+                summary.append({
+                    "Expected Type": t,
+                    "Detected In": "",
+                    "Status": "MISSING" if t in required_types else "Optional - Not Uploaded"
+                })
+
+        df = pd.DataFrame(summary)
+        st.subheader("User Document Classification Summary")
+        st.dataframe(df)
+
+        # --- PREPARE PROMPT FOR OPENAI ---
         user_documents_text = ""
         for doc in user_docs:
-            user_documents_text += f"{doc['filename']}:\n{doc['text'][:1500]}\n\n"
+            user_documents_text += f"{doc['type_detected']} ({doc['filename']}):\n{doc['text'][:1500]}\n\n"
 
-        # --- UNIFIED PROMPT ---
+        reference_documents_text = ""
+        for doc in reference_docs:
+            reference_documents_text += f"{doc['filename']}:\n{doc['text'][:1500]}\n\n"
+
+        # --- IMPROVED PROMPT ENGINEERING ---
         ethics_prompt = f"""
-You are an expert in Indian research ethics committee review. Your role is to analyze the user's submission against three baseline reference documents:
+You are an expert in India-related ethics committee working. You will provide answers based only on the reference documents provided below, except for English and grammar, where you may use your own expertise or other references.
 
-1. ICMR National Ethical Guidelines for Biomedical and Health Research involving Human Participants (2017)
-2. ICMR National Guidelines for Ethics Committees Reviewing Biomedical & Health Research during COVID-19 Pandemic (2020)
-3. CDSCO Good Clinical Practice Guidelines (2001)
-
-**Instructions:**
-
-- If any required user document is missing, or if a document appears to be mislabeled (e.g., a "Questionnaire" that looks like a "Research Proposal"), clearly state this at the very beginning and suggest which document(s) need to be uploaded or corrected.
-
-- For each of the three reference documents above, create a table with three columns:
-    | Section/Clause | Compliance (Yes/No/Partial) | Explanation |
-  - The first column should reference the most relevant section or clause of the guideline.
-  - The second column should state whether the user's submission is compliant, non-compliant, or partially compliant.
-  - The third column should briefly explain your assessment for each section or clause.
-  - Only include the most critical and relevant sections/clauses from each guideline (do not include the entire guideline).
-
-**Markdown Table Formatting Rules:**
+**IMPORTANT INSTRUCTIONS FOR TABLES:**
 - All tables must be valid markdown.
 - Every row (header and data) must start and end with the '|' character.
 - The header separator line must also start and end with '|'.
 - Example:
-    | Section/Clause | Compliance (Yes/No/Partial) | Explanation |
-    |---------------|-----------------------------|-------------|
-    | 4.2 Informed Consent | Yes | User provided a valid consent form. |
+| Column 1 | Column 2 |
+|----------|----------|
+| Data A   | Data B   |
 
-**Table Placement Rules:**
-- Place each table only in the section for its respective guideline, clearly labeled with the guideline name as a heading.
+- Tables must only appear in the explicitly requested numbered sections (e.g., Section 1 for Required Documents).
 - Do not repeat or place tables in any other section.
 
-**Additional Analysis:**
-- After the three tables, provide:
-    - A concise summary and overall recommendation for the user's submission (in plain text, not a table).
-    - A section on English and construction of the questionnaire, highlighting any concerns in a markdown table (if applicable).
-    - An assessment of whether the questionnaire and informed consent align with the research proposal.
-    - Any other relevant aspects you wish to highlight.
-    - Any additional questions to ask the user, with brief explanations.
+Your task is to review the following uploaded documents and provide a detailed analysis as per these points:
 
----
+1. Are all the required documents provided? Present this in a markdown table as shown above.
+2. Does this proposal meet ethics requirements as per the reference documents? Give section-wise compliance or non-compliance, with explanations where it is non-compliant.
+3. Compare the English and construction of the questionnaire and highlight any concerns (present in a markdown table as shown above).
+4. Does the questionnaire and informed consent align with the research proposal?
+5. Any other aspect that you might want to highlight.
+6. Overall recommendation and questions to ask (and why).
 
-**User Submission (for review):**
+Please start your answer with a 2-3 line summary of your findings.
+
+User Name:
+{user_name}
+
+User Documents:
 {user_documents_text}
 
----
-
-**Reference Documents (for your use):**
-1. ICMR National Ethical Guidelines for Biomedical and Health Research involving Human Participants (2017)
-2. ICMR National Guidelines for Ethics Committees Reviewing Biomedical & Health Research during COVID-19 Pandemic (2020)
-3. CDSCO Good Clinical Practice Guidelines (2001)
+Reference Documents:
+{reference_documents_text}
 """
 
         # --- CALL OPENAI ---
@@ -301,7 +360,7 @@ You are an expert in Indian research ethics committee review. Your role is to an
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": ethics_prompt}],
-            max_tokens=1800,
+            max_tokens=1500,
             temperature=0.2,
         )
         ai_review = response.choices[0].message.content
@@ -311,7 +370,7 @@ You are an expert in Indian research ethics committee review. Your role is to an
         st.write(ai_review)
 
         # --- CREATE STRUCTURED PDF REPORT ---
-        pdf_buffer = create_pdf_report(user_name, ai_review)
+        pdf_buffer = create_pdf_report(user_name, summary, ai_review)
         file_name = f"{user_name.replace(' ', '_')}_ECR_Report.pdf"
         st.download_button(
             label="Download ECR Report as PDF",
