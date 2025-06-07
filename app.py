@@ -21,7 +21,7 @@ col1, col2 = st.columns([8, 1])
 with col1:
     st.markdown("<h1 style='color:#06038D; margin-bottom: 0;'>ECR SYSTEM</h1>", unsafe_allow_html=True)
 with col2:
-    st.image("logo_ecr.png", width=100) # This assumes logo_ecr.png is in the same directory
+    st.image("logo_ecr.png", width=150) # This assumes logo_ecr.png is in the same directory
 
 user_name = st.text_input("Enter your name")
 if user_name:
