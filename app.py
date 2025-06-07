@@ -12,7 +12,7 @@ import re
 
 # --- SIDEBAR WITH LOGO AND COMPANY INFO ---
 with st.sidebar:
-    st.image("logo.png", width=120)
+    st.image("logo.png", width=120) # This assumes logo.png is in the same directory
     st.markdown("<h3 style='color:#06038D;'>ECR SYSTEM</h3>", unsafe_allow_html=True)
     st.markdown("<span style='color:#FF671F;'>Powered by SSO Consultants</span>", unsafe_allow_html=True)
 
@@ -21,7 +21,7 @@ col1, col2 = st.columns([8, 1])
 with col1:
     st.markdown("<h1 style='color:#06038D; margin-bottom: 0;'>ECR SYSTEM</h1>", unsafe_allow_html=True)
 with col2:
-    st.image("logo_ecr.png", width=60)  # Use your generated logo file here
+    st.image("logo_ecr.png", width=60) # This assumes logo_ecr.png is in the same directory
 
 user_name = st.text_input("Enter your name")
 if user_name:
@@ -217,6 +217,7 @@ if run_review and uploaded_files and user_name:
 
         user_documents_text = ""
         for doc in user_docs:
+            # Limiting text to 1500 characters as per original prompt, adjust if needed
             user_documents_text += f"{doc['filename']}:\n{doc['text'][:1500]}\n\n"
 
         ethics_prompt = f"""
@@ -273,7 +274,7 @@ You are an expert in Indian research ethics committee review. Your role is to an
 
         client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
         response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="gpt-3.5-turbo", # You might consider a more recent model if available and cost-effective
             messages=[{"role": "user", "content": ethics_prompt}],
             max_tokens=1800,
             temperature=0.2,
@@ -284,7 +285,8 @@ You are an expert in Indian research ethics committee review. Your role is to an
         st.write(f"Hello {user_name}, here is your review:")
         st.write(ai_review)
 
-        pdf_buffer = create_pdf_report(user_name, ai_review)
+        # Pass "logo.png" as the default path for the PDF report's header logo
+        pdf_buffer = create_pdf_report(user_name, ai_review, logo_path="logo.png")
         file_name = f"{user_name.replace(' ', '_')}_ECR_Report.pdf"
         st.download_button(
             label="Download ECR Report as PDF",
