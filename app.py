@@ -48,13 +48,14 @@ def extract_text_from_pdf(file):
         text += page.extract_text() or ""
     return text
 
+# --- MODIFIED PARSING FUNCTIONS ---
+
 def extract_section_text(text, section_title):
     # This extracts the full text content under a section heading
     # Looks for the section title and captures text until the next heading or end of string.
     # Pattern for headings: A line starting with a capital letter or number followed by spaces, then words.
     # Excludes the "Additional Questions" section as it's handled separately.
-    # Updated to handle potential variations in headings.
-    headings_pattern = r"(?:^|\n)(?!Additional Questions)(?:[A-Z0-9][^\n:]*?:|Summary and Recommendation:|English and Construction of the Questionnaire:|Questionnaire and Informed Consent Alignment:|Additional Aspects:|Additional Questions:)"
+    headings_pattern = r"(?:^|\n)(?!Additional Questions)(?:[A-Z0-9][^\n]*?:|Summary and Recommendation:|English and Construction of the Questionnaire:|Questionnaire and Informed Consent Alignment:|Additional Aspects:|Additional Questions:)"
     
     start_index = text.find(section_title)
     if start_index == -1:
@@ -73,7 +74,107 @@ def extract_section_text(text, section_title):
     else:
         return text[start_index:].strip() # Capture till end if no next heading
 
-# --- MODIFIED create_pdf_report to handle plain text for "tables" ---
+def parse_ai_table_like_text(table_like_text, num_columns):
+    # This function attempts to parse the AI's non-markdown table text into rows and columns
+    # It assumes the first line contains the concatenated headers.
+    # It then tries to split subsequent lines into a fixed number of columns based on heuristics.
+    
+    lines = [line.strip() for line in table_like_text.split('\n') if line.strip()]
+    if not lines:
+        return [], []
+
+    # Heuristically identify headers from the first line
+    headers = []
+    if num_columns == 3:
+        headers = ["Section/Clause", "Compliance (Yes/No/Partial)", "Explanation"]
+    elif num_columns == 2:
+        headers = ["Concern", "Explanation"]
+    
+    # Attempt to split the content into rows based on known patterns or newline
+    # This is the trickiest part due to lack of delimiters
+    
+    # Example for 3 columns (Guideline tables)
+    # Input: Informed ConsentPartialThe submission includes informed consent forms, but it lacks details...
+    # We need to find "Informed Consent", then "Partial", then the rest.
+    
+    rows = []
+    current_row_data = []
+    
+    if num_columns == 3:
+        # Regex to find common starting patterns for Section/Clause column
+        # This is highly heuristic and might need adjustment based on diverse AI outputs
+        row_start_patterns = [
+            r"^(?:Informed Consent|Research Objectives|Voluntary Participation|Review Process|Participant Safety|Data Management|Data Validation|Investigator Responsibilities|Adverse Event Reporting)",
+            r"^(?:Chapter \d+|Section \d+)" # Catch generic chapter/section
+        ]
+        
+        # Regex to find compliance values
+        compliance_patterns = r"(Yes|No|Partial)"
+        
+        full_text_after_headers = table_like_text # Consider the whole block after the "headers" line
+        
+        # Split by known Section/Clause names, assuming each creates a new row
+        # This is a challenging part without clear delimiters from the AI.
+        
+        # A simpler approach: try to find common compliance indicators
+        # This is still very fragile.
+        
+        # Let's try to split by the known sections in the output
+        section_names = [
+            "Informed Consent", "Research Objectives", "Voluntary Participation",
+            "Review Process", "Participant Safety", "Data Management",
+            "Data Validation", "Investigator Responsibilities", "Adverse Event Reporting"
+        ]
+        
+        # Create a combined regex pattern for all section names to split the text
+        split_pattern = '|'.join(re.escape(name) for name in section_names)
+        
+        # Use finditer to find all matches and extract content between them
+        matches = list(re.finditer(split_pattern, full_text_after_headers))
+        
+        for i, match in enumerate(matches):
+            section_clause = match.group(0)
+            
+            start_content_index = match.end()
+            end_content_index = matches[i+1].start() if i+1 < len(matches) else len(full_text_after_headers)
+            
+            content_after_section = full_text_after_headers[start_content_index:end_content_index].strip()
+            
+            # Now, try to extract Compliance and Explanation from content_after_section
+            comp_match = re.search(compliance_patterns, content_after_section)
+            
+            compliance = ""
+            explanation = content_after_section # Default explanation to full content
+            
+            if comp_match:
+                compliance = comp_match.group(0)
+                # Split content based on compliance match
+                parts = content_after_section.split(compliance, 1)
+                explanation = parts[1].strip() if len(parts) > 1 else ""
+            
+            rows.append([section_clause, compliance, explanation])
+            
+    elif num_columns == 2:
+        # For Concern/Explanation table, similar heuristic
+        concern_names = ["Language Clarity", "Structured Format", "Cultural Sensitivity"]
+        split_pattern = '|'.join(re.escape(name) for name in concern_names)
+        
+        full_text_after_headers = table_like_text
+        matches = list(re.finditer(split_pattern, full_text_after_headers))
+        
+        for i, match in enumerate(matches):
+            concern = match.group(0)
+            
+            start_content_index = match.end()
+            end_content_index = matches[i+1].start() if i+1 < len(matches) else len(full_text_after_headers)
+            
+            explanation = full_text_after_headers[start_content_index:end_content_index].strip()
+            
+            rows.append([concern, explanation])
+            
+    return headers, rows
+
+# --- REVISED create_pdf_report to use new parsing ---
 def create_pdf_report(user_name, ai_review, logo_path="logo.png"):
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=30, leftMargin=30, topMargin=40, bottomMargin=30)
@@ -83,26 +184,6 @@ def create_pdf_report(user_name, ai_review, logo_path="logo.png"):
     styleH.textColor = colors.HexColor("#06038D")
     styleN = styles['Normal']
     styleN.fontSize = 11
-
-    # Custom style for section sub-headings (e.g., for "Compliance")
-    section_sub_heading_style = ParagraphStyle(
-        name='SectionSubHeading',
-        parent=styles['h3'],
-        fontSize=12,
-        leading=14,
-        spaceAfter=6,
-        textColor=colors.HexColor("#06038D") # Use a brand color
-    )
-    
-    # Custom style for compliance/explanation text
-    compliance_text_style = ParagraphStyle(
-        name='ComplianceText',
-        parent=styles['Normal'],
-        fontSize=10,
-        leading=12,
-        spaceBefore=3,
-        spaceAfter=3,
-    )
 
     # --- LOGO AND TITLE ---
     table_data = []
@@ -118,110 +199,97 @@ def create_pdf_report(user_name, ai_review, logo_path="logo.png"):
     elements.append(Spacer(1, 12))
 
     # --- MISSING/MISLABELED DOCUMENTS WARNING (if present) ---
-    # Find the first paragraph in AI review. If it contains "missing" or "mislabeled"
-    first_paragraph_match = re.match(r"(.*?)(?:\n\n|$)", ai_review.strip(), re.DOTALL)
-    if first_paragraph_match:
-        first_paragraph = first_paragraph_match.group(1)
-        if 'missing' in first_paragraph.lower() or 'mislabeled' in first_paragraph.lower():
-            elements.append(Paragraph(f"<b>Attention:</b> {first_paragraph}", ParagraphStyle('warning', textColor=colors.red, fontSize=11)))
-            elements.append(Spacer(1, 12))
+    first_lines = ai_review.strip().split('\n')
+    if first_lines and ('missing' in first_lines[0].lower() or 'mislabeled' in first_lines[0].lower()):
+        elements.append(Paragraph(f"<b>Attention:</b> {first_lines[0]}", ParagraphStyle('warning', textColor=colors.red, fontSize=11)))
+        elements.append(Spacer(1, 12))
 
-
-    # --- GUIDELINE SECTIONS (Now in readable text, not tables) ---
-    guideline_sections = [
-        "ICMR National Ethical Guidelines for Biomedical and Health Research involving Human Participants (2017)",
-        "ICMR National Guidelines for Ethics Committees Reviewing Biomedical & Health Research during COVID-19 Pandemic (2020)",
-        "CDSCO Good Clinical Practice Guidelines (2001)",
+    # --- TABLES FOR EACH GUIDELINE ---
+    guidelines = [
+        ("ICMR National Ethical Guidelines for Biomedical and Health Research involving Human Participants (2017)", "ICMR National Ethical Guidelines for Biomedical and Health Research involving Human Participants (2017)", 3),
+        ("ICMR National Guidelines for Ethics Committees Reviewing Biomedical & Health Research during COVID-19 Pandemic (2020)", "ICMR National Guidelines for Ethics Committees Reviewing Biomedical & Health Research during COVID-19 Pandemic (2020)", 3),
+        ("CDSCO Good Clinical Practice Guidelines (2001)", "CDSCO Good Clinical Practice Guidelines (2001)", 3),
     ]
 
-    for guideline_title in guideline_sections:
-        elements.append(Paragraph(f'<b>{guideline_title}</b>', section_sub_heading_style))
-        section_content = extract_section_text(ai_review, guideline_title)
+    for full_title, section_header, num_cols in guidelines:
+        elements.append(Paragraph(f'<b>{full_title}</b>', styleH))
+        section_raw_text = extract_section_text(ai_review, section_header)
+        
+        # Skip the header line "Section/ClauseCompliance..." in the raw text
+        content_for_parsing = ""
+        header_found = False
+        for line in section_raw_text.split('\n'):
+            if not header_found and ("Section/Clause" in line or "Concern" in line): # Identify the concatenated header
+                header_found = True
+                continue
+            if header_found:
+                content_for_parsing += line + "\n"
 
-        # Attempt to split the section content into logical "rows" based on known phrases
-        # This is still a heuristic, but more robust than trying to force into a table.
-        # This regex tries to split by the start of a new "Section/Clause" type entry
-        # It's less strict than before to catch variations in AI output
-        item_pattern = r"(Informed Consent|Research Objectives|Voluntary Participation|Review Process|Participant Safety|Data Management|Data Validation|Investigator Responsibilities|Adverse Event Reporting)"
+        headers, rows = parse_ai_table_like_text(content_for_parsing.strip(), num_cols)
         
-        # Split the text by these markers, keeping the markers
-        parts = re.split(item_pattern, section_content, flags=re.IGNORECASE)
-        
-        # The first part (before the first item_pattern match) might contain the header line.
-        # We need to process parts from the second element onwards, in pairs (marker, content)
-        
-        # Find the actual start of content after the initial header string like "Section/ClauseCompliance..."
-        content_start_after_header_match = re.search(r"(Section/Clause|Compliance|Explanation)", section_content, re.IGNORECASE)
-        if content_start_after_header_match:
-            actual_content_start_index = section_content.find(content_start_after_header_match.group(0)) + len(content_start_after_header_match.group(0))
-            section_content_after_header = section_content[actual_content_start_index:].strip()
+        if headers and rows:
+            data = [headers] + rows
+            t = Table(data, colWidths=[150, 120, 200] if num_cols == 3 else [180, 290])
+            t.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#F0F2F6")),
+                ('TEXTCOLOR', (0,0), (-1,0), colors.HexColor("#06038D")),
+                ('ALIGN',(0,0),(-1,-1),'LEFT'), # Changed to left for better text flow
+                ('GRID', (0,0), (-1,-1), 1, colors.HexColor("#06038D")),
+                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0,0), (-1,-1), 10),
+                ('VALIGN', (0,0), (-1,-1), 'TOP'), # Align text to top
+            ]))
+            elements.append(t)
         else:
-            section_content_after_header = section_content # Fallback
-
-        # Re-split the content after the header to accurately get items
-        items = re.split(item_pattern, section_content_after_header, flags=re.IGNORECASE)
-        
-        # Process the items, assuming first is junk, then [Section, Content, Section, Content...]
-        processed_items_count = 0
-        for i in range(1, len(items), 2):
-            if i + 1 < len(items):
-                section_clause = items[i].strip()
-                item_details = items[i+1].strip()
-
-                # Try to extract Compliance (Yes/No/Partial) and Explanation
-                compliance_match = re.search(r"(Yes|No|Partial)", item_details, re.IGNORECASE)
-                compliance = ""
-                explanation = item_details
-
-                if compliance_match:
-                    compliance = compliance_match.group(0)
-                    parts_after_compliance = item_details.split(compliance, 1)
-                    explanation = parts_after_compliance[1].strip() if len(parts_after_compliance) > 1 else ""
-                
-                elements.append(Paragraph(f"<b>Section/Clause:</b> {section_clause}", compliance_text_style))
-                elements.append(Paragraph(f"<b>Compliance:</b> {compliance if compliance else 'N/A'}", compliance_text_style))
-                elements.append(Paragraph(f"<b>Explanation:</b> {explanation if explanation else 'N/A'}", compliance_text_style))
-                elements.append(Spacer(1, 6)) # Small space between items
-                processed_items_count += 1
-        
-        if processed_items_count == 0:
-            elements.append(Paragraph("No structured details found for this guideline.", styleN))
+            elements.append(Paragraph("No structured table content found for this guideline.", styleN))
         elements.append(Spacer(1, 12))
 
     # --- ADDITIONAL ANALYSIS SECTIONS ---
     
     # English and Construction of the Questionnaire
-    elements.append(Paragraph('<b>English and Construction of the Questionnaire</b>', section_sub_heading_style))
-    section_content_eq = extract_section_text(ai_review, "English and Construction of the Questionnaire:")
+    elements.append(Paragraph('<b>English and Construction of the Questionnaire</b>', styleH))
+    section_header_eq = "English and Construction of the Questionnaire:"
+    section_raw_text_eq = extract_section_text(ai_review, section_header_eq)
     
-    # Similar parsing for English/Questionnaire section
-    eq_item_pattern = r"(Language Clarity|Structured Format|Cultural Sensitivity)"
-    eq_items = re.split(eq_item_pattern, section_content_eq, flags=re.IGNORECASE)
-
-    processed_eq_items_count = 0
-    for i in range(1, len(eq_items), 2):
-        if i + 1 < len(eq_items):
-            concern = eq_items[i].strip()
-            explanation = eq_items[i+1].strip()
+    content_for_parsing_eq = ""
+    header_found_eq = False
+    for line in section_raw_text_eq.split('\n'):
+        if not header_found_eq and ("Concern" in line and "Explanation" in line): # Identify the concatenated header
+            header_found_eq = True
+            continue
+        if header_found_eq:
+            content_for_parsing_eq += line + "\n"
             
-            elements.append(Paragraph(f"<b>Concern:</b> {concern}", compliance_text_style))
-            elements.append(Paragraph(f"<b>Explanation:</b> {explanation if explanation else 'N/A'}", compliance_text_style))
-            elements.append(Spacer(1, 6))
-            processed_eq_items_count += 1
-
-    if processed_eq_items_count == 0:
-        elements.append(Paragraph("No structured concerns found.", styleN))
+    headers_eq, rows_eq = parse_ai_table_like_text(content_for_parsing_eq.strip(), 2) # 2 columns for this section
+    
+    if headers_eq and rows_eq:
+        data_eq = [headers_eq] + rows_eq
+        t_eq = Table(data_eq, colWidths=[180, 290]) # Adjusted colWidths for 2 columns
+        t_eq.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#F0F2F6")),
+            ('TEXTCOLOR', (0,0), (-1,0), colors.HexColor("#06038D")),
+            ('ALIGN',(0,0),(-1,-1),'LEFT'), # Changed to left
+            ('GRID', (0,0), (-1,-1), 1, colors.HexColor("#06038D")),
+            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0,0), (-1,-1), 10),
+            ('VALIGN', (0,0), (-1,-1), 'TOP'),
+        ]))
+        elements.append(t_eq)
+    else:
+        elements.append(Paragraph("No structured concerns table found.", styleN))
     elements.append(Spacer(1, 12))
 
     # Questionnaire and Informed Consent Alignment
-    elements.append(Paragraph('<b>Questionnaire and Informed Consent Alignment</b>', section_sub_heading_style))
+    elements.append(Paragraph('<b>Questionnaire and Informed Consent Alignment</b>', styleH))
     alignment_text = extract_section_text(ai_review, "Questionnaire and Informed Consent Alignment:")
     elements.append(Paragraph(alignment_text if alignment_text else "No information provided.", styleN))
     elements.append(Spacer(1, 12))
 
     # Additional Aspects
-    elements.append(Paragraph('<b>Additional Aspects</b>', section_sub_heading_style))
+    elements.append(Paragraph('<b>Additional Aspects</b>', styleH))
     aspects_text = extract_section_text(ai_review, "Additional Aspects:")
+    # This section usually comes as bullet points from the AI, not a table.
+    # Convert bullet points if present for better display.
     if aspects_text:
         for line in aspects_text.split('\n'):
             if line.strip().startswith('-'):
@@ -233,18 +301,18 @@ def create_pdf_report(user_name, ai_review, logo_path="logo.png"):
     elements.append(Spacer(1, 12))
     
     # Summary & Recommendation
-    elements.append(Paragraph('<b>Summary & Recommendation</b>', section_sub_heading_style))
+    elements.append(Paragraph('<b>Summary & Recommendation</b>', styleH))
     summary_text = extract_section_text(ai_review, "Summary and Recommendation:")
     elements.append(Paragraph(summary_text, ParagraphStyle('summary', textColor=colors.HexColor("#FF671F"), fontSize=11)))
     elements.append(Spacer(1, 24))
 
     # Additional Questions
-    elements.append(Paragraph('<b>Additional Questions</b>', section_sub_heading_style))
+    elements.append(Paragraph('<b>Additional Questions</b>', styleH))
     questions_text = extract_section_text(ai_review, "Additional Questions:")
     if questions_text:
         # Format as bullet points
         for line in questions_text.split('\n'):
-            if line.strip().startswith('Can') or line.strip().startswith('How') or line.strip().startswith('Could') or line.strip().startswith('1.') or line.strip().startswith('2.') or line.strip().startswith('3.'):
+            if line.strip().startswith('Can') or line.strip().startswith('How') or line.strip().startswith('Could'):
                 elements.append(Paragraph(f"• {line.strip()}", styleN))
             else:
                 elements.append(Paragraph(line.strip(), styleN))
@@ -279,8 +347,6 @@ if run_review and uploaded_files and user_name:
         for doc in user_docs:
             user_documents_text += f"{doc['filename']}:\n{doc['text'][:1500]}\n\n"
 
-        # Retained explicit markdown instructions in prompt, as it might subtly influence the AI's structure
-        # even if not perfectly adhered to with pipes.
         ethics_prompt = f"""
 You are an expert in Indian research ethics committee review. Your role is to analyze the user's submission against three baseline reference documents:
 
@@ -292,26 +358,38 @@ You are an expert in Indian research ethics committee review. Your role is to an
 
 - If any required user document is missing, or if a document appears to be mislabeled (e.g., a "Questionnaire" that looks like a "Research Proposal"), clearly state this at the very beginning and suggest which document(s) need to be uploaded or corrected.
 
-- For each of the three reference documents above, provide a review. For each point of review, state the relevant Section/Clause, the Compliance (Yes/No/Partial), and an Explanation.
-  - The first point should reference the most relevant section or clause of the guideline.
-  - The second point should state whether the user's submission is compliant, non-compliant, or partially compliant.
-  - The third point should briefly explain your assessment for each section or clause.
+- For each of the three reference documents above, create a table with three columns:
+    | Section/Clause | Compliance (Yes/No/Partial) | Explanation |
+  - The first column should reference the most relevant section or clause of the guideline.
+  - The second column should state whether the user's submission is compliant, non-compliant, or partially compliant.
+  - The third column should briefly explain your assessment for each section or clause.
   - Only include the most critical and relevant sections/clauses from each guideline (do not include the entire guideline).
 
-**STRICT ADHERENCE TO TEXT FORMATTING:**
-- For the review points under each guideline, present them clearly in the following format:
-  Section/Clause: [Your Section/Clause Text]
-  Compliance: [Yes/No/Partial]
-  Explanation: [Your detailed explanation]
-- Ensure each of these three components (Section/Clause, Compliance, Explanation) is on its own line and clearly labeled as shown above. This is crucial for readability in the final report.
+**Markdown Table Formatting Rules: STRICTLY ADHERE TO THIS. ALL TABLES MUST BE VALID MARKDOWN.**
+- Start and end every header and data row with a pipe character '|'.
+- Separate columns with pipe characters '|'.
+- Include the header separator line `|---|---|---|` which must also start and end with '|'.
+- **CRITICAL:** Ensure that `| Section/Clause | Compliance (Yes/No/Partial) | Explanation |` is the first line of your table, followed by `|---------------|-----------------------------|-------------|`.
+- **Example of a PERFECTLY FORMATTED table (COPY THIS STRUCTURE EXACTLY):**
+    ```
+    | Section/Clause     | Compliance (Yes/No/Partial) | Explanation                          |
+    |--------------------|-----------------------------|--------------------------------------|
+    | 4.2 Informed Consent | Yes                         | User provided a valid consent form.  |
+    | 5.1 Data Privacy   | Partial                     | Data anonymization needs clarification. |
+    ```
+- Ensure there are no missing pipes or separator lines.
+
+**Table Placement Rules:**
+- Place each table only in the section for its respective guideline, clearly labeled with the guideline name as a heading.
+- Do not repeat or place tables in any other section.
 
 **Additional Analysis:**
-- After the three guideline reviews, provide:
-    - A concise summary and overall recommendation for the user's submission (in plain text).
-    - A section on English and construction of the questionnaire, highlighting any concerns. For each concern, clearly label the 'Concern:' and 'Explanation:' on separate lines.
+- After the three tables, provide:
+    - A concise summary and overall recommendation for the user's submission (in plain text, not a table).
+    - A section on English and construction of the questionnaire, highlighting any concerns in a markdown table (if applicable).
     - An assessment of whether the questionnaire and informed consent align with the research proposal.
-    - Any other relevant aspects you wish to highlight (use bullet points if listing multiple items).
-    - Any additional questions to ask the user, with brief explanations (use bullet points for each question).
+    - Any other relevant aspects you wish to highlight.
+    - Any additional questions to ask the user, with brief explanations.
 
 ---
 
@@ -328,7 +406,7 @@ You are an expert in Indian research ethics committee review. Your role is to an
 
         client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
         response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="gpt-3.5-turbo", # You might consider a more recent model if available and cost-effective
             messages=[{"role": "user", "content": ethics_prompt}],
             max_tokens=1800,
             temperature=0.2,
